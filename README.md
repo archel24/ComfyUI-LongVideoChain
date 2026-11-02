@@ -67,4 +67,5 @@ berhenti dengan pesan jelas (bukan melanjutkan dengan data yang salah).
 * Kualitas bisa pelan-pelan bergeser (warna/detail) setelah banyak segmen, karena tiap segmen dimulai dari satu gambar. Gambar referensi (wajah dsb.) di workflow sengaja tetap memakai gambar **asli**, bukan frame hasil, supaya identitas tidak ikut melenceng.
 * Audio dibuat terpisah per segmen oleh model, jadi suara/musik bisa "melompat" di sambungan.
 * Antrean otomatis memakai endpoint `/prompt` bawaan ComfyUI dari sisi server (browser tidak perlu terbuka). Seed di-random ulang tiap segmen (`randomize_seeds`).
-* Jangan menekan Run lagi selagi rantai masih berjalan; itu memulai video baru yang berjalan bersamaan dan memperebutkan GPU.
+* Jangan menekan Run lagi selagi rantai masih berjalan: itu memulai video **kedua** yang antreannya berselang-seling dengan yang pertama (keduanya selesai dengan benar, tetapi GPU dipakai dua kali lipat). Setiap run lanjutan terkunci ke folder rantainya sendiri, jadi dua rantai tidak saling mengacaukan.
+* Run lanjutan diantrekan dari workflow yang sama; node Save hanya mengirim `class_type`/`inputs`/`_meta` (data internal ComfyUI seperti `is_changed` sengaja dibuang, kalau tidak ComfyUI memakai ulang hasil cache node Start dan segmen yang sama terulang).

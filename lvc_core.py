@@ -55,6 +55,11 @@ def chain_base(root, chain_id):
 _GEN_SUFFIX = r"__(?:g(\d+)|(\d{8}_\d{6})(?:_(\d+))?)"
 
 
+def base_chain_id(name):
+    """'my_video__20261102_061452' -> 'my_video' (a plain id is returned unchanged)."""
+    return re.sub(_GEN_SUFFIX + "$", "", sanitize_chain_id(name))
+
+
 def is_generation_name(name):
     return re.search(_GEN_SUFFIX + "$", name) is not None
 
@@ -215,9 +220,11 @@ def begin_segment(output_root, chain_id, initial_u8, total_segments, mode="new_c
     sig = image_signature(initial_u8)
     note, cdir, state = "", None, None
 
+    base_id = base_chain_id(chain_id)
     if mode == "continue":
-        cdir = latest_chain_dir(output_root, chain_id)
-        state = load_state(cdir) if cdir else None
+        # an exact chain-folder name (what the automatic re-queue passes) pins the chain; a plain id = newest chain
+        cdir = resolve_chain_dir(output_root, chain_id)
+        state = load_state(cdir) if os.path.isdir(cdir) else None
         if state is not None and state.get("done"):
             note = f"chain '{os.path.basename(cdir)}' is already finished -> starting a new chain"
             cdir, state = None, None
@@ -227,10 +234,10 @@ def begin_segment(output_root, chain_id, initial_u8, total_segments, mode="new_c
 
     created = state is None
     if created:
-        cdir = new_generation_dir(output_root, chain_id)
+        cdir = new_generation_dir(output_root, base_id)
         state = {
             "version": STATE_VERSION,
-            "chain_id": sanitize_chain_id(chain_id),
+            "chain_id": base_id,
             "initial_sig": sig,
             "fps": None,
             "next_index": 0,
@@ -459,14 +466,31 @@ def server_base_url(address, port, tls=False):
     return f"{'https' if tls else 'http'}://{first}:{int(port)}"
 
 
-def requeue_prompt(base_url, prompt, client_id=None, extra_pnginfo=None, randomize_seeds=True, timeout=30):
-    """Queue the very same workflow again through ComfyUI's own /prompt endpoint."""
-    new_prompt = copy.deepcopy(prompt)
+_PROMPT_NODE_KEYS = ("class_type", "inputs", "_meta")
+
+
+def requeue_prompt(base_url, prompt, client_id=None, extra_pnginfo=None, randomize_seeds=True, timeout=30,
+                   chain_folder=None):
+    """Queue the very same workflow again through ComfyUI's own /prompt endpoint.
+
+    The queued run is pinned to THIS chain: Start.mode = continue and (if given) Start.chain_id = the exact chain
+    folder name.
+    """
+    # The PROMPT ComfyUI hands to a node is its working copy: ComfyUI writes its own bookkeeping into it, notably
+    # node["is_changed"] = [nan]. Sent back as JSON that NaN becomes ONE shared object, every node then looks
+    # "unchanged", and ComfyUI re-uses the cached output of the Start node -> the same segment is generated again
+    # (and Save reports "out of sync"). So send only the real workflow: class_type / inputs / _meta.
+    new_prompt = {
+        nid: ({k: copy.deepcopy(v) for k, v in node.items() if k in _PROMPT_NODE_KEYS} if isinstance(node, dict) else node)
+        for nid, node in prompt.items()
+    }
     for node in new_prompt.values():  # the queued runs must CONTINUE this chain, not start a new one
         if isinstance(node, dict) and node.get("class_type") == "LVCSegmentStart":
             inputs = node.setdefault("inputs", {})
             if not isinstance(inputs.get("mode"), list):
                 inputs["mode"] = "continue"
+            if chain_folder and not isinstance(inputs.get("chain_id"), list):
+                inputs["chain_id"] = chain_folder
     if randomize_seeds:
         _randomize_seeds(new_prompt)
     payload = {"prompt": new_prompt, "extra_data": {}}
@@ -475,7 +499,7 @@ def requeue_prompt(base_url, prompt, client_id=None, extra_pnginfo=None, randomi
     if client_id:
         payload["client_id"] = client_id
     req = urllib.request.Request(
-        base_url + "/prompt", data=json.dumps(payload).encode("utf-8"),
+        base_url + "/prompt", data=json.dumps(payload, allow_nan=False).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST",
     )
     ctx = None

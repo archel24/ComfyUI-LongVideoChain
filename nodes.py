@@ -42,6 +42,12 @@ def _final_path(chain_id):
     return os.path.join(out_dir, f"final_{time.strftime('%Y%m%d_%H%M%S')}.mp4")
 
 
+def _fresh():
+    """A value that is different on every call, for IS_CHANGED (so ComfyUI never re-uses a cached result).
+    A plain string, not NaN: NaN only works while every NaN is a separate object."""
+    return f"{time.time_ns()}-{os.urandom(6).hex()}"
+
+
 def _server_info():
     from server import PromptServer
     srv = PromptServer.instance
@@ -99,7 +105,7 @@ class LVCSegmentStart:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return float("nan")  # must re-evaluate on EVERY run, otherwise ComfyUI would cache segment 0 forever
+        return _fresh()  # must re-evaluate on EVERY run, otherwise ComfyUI would cache segment 0 forever
 
     def run(self, initial_image, chain_id, total_segments, prompts, mode="new_chain", prompt_list=None):
         root = _work_root()
@@ -178,7 +184,7 @@ class LVCSegmentSave:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return float("nan")
+        return _fresh()
 
     def run(self, images, chain_id, segment_index, total_segments, fps, tail_trim, segment_crf, final_crf,
             auto_requeue, randomize_seeds, audio=None, prompt=None, extra_pnginfo=None):
@@ -224,7 +230,8 @@ class LVCSegmentSave:
             else:
                 try:
                     base, client_id = _server_info()
-                    core.requeue_prompt(base, prompt, client_id, extra_pnginfo, randomize_seeds)
+                    core.requeue_prompt(base, prompt, client_id, extra_pnginfo, randomize_seeds,
+                                        chain_folder=os.path.basename(cdir))
                     status += " -> next segment queued"
                 except Exception as e:  # segment is safe on disk; just press Run to resume
                     status += f" (auto-queue failed: {e}; press Run to resume)"
@@ -252,7 +259,7 @@ class LVCStitch:
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
-        return float("nan")
+        return _fresh()
 
     def run(self, chain_id, final_crf):
         root = folder_paths.get_output_directory()
