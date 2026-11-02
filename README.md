@@ -39,6 +39,12 @@ beberapa frame terakhir dibuang dan benih diambil dari frame yang lebih bersih (
 * Semua segmen disambung dengan encode tunggal di akhir (`final_crf`, default 16). File antara memakai `segment_crf` (default 12).
 * Jika satu segmen resolusinya berbeda, frame-nya diubah ukurannya mengikuti segmen pertama.
 
+## Folder kerja terpisah (opsional, berguna di Colab)
+Secara default semua file kerja (state, frame benih, video per segmen) disimpan di
+`output/long_video_chain/<chain_id>/`. Jika folder output Anda disinkronkan ke tempat lain (mis. Google Drive),
+set variabel lingkungan `LVC_WORK_DIR` ke folder lokal lain sebelum menjalankan ComfyUI. File kerja akan
+disimpan di sana, dan **hanya video akhir** yang ditaruh di folder output.
+
 ## Batasan yang perlu diketahui
 * Kualitas bisa pelan-pelan bergeser (warna/detail) setelah banyak segmen, karena tiap segmen dimulai dari satu gambar. Gambar referensi (wajah dsb.) di workflow sengaja tetap memakai gambar **asli**, bukan frame hasil, supaya identitas tidak ikut melenceng.
 * Audio dibuat terpisah per segmen oleh model, jadi suara/musik bisa "melompat" di sambungan.

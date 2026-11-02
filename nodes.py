@@ -26,6 +26,22 @@ def _from_u8(a):
     return torch.from_numpy(a.astype(np.float32) / 255.0).unsqueeze(0)
 
 
+def _work_root():
+    """Where state / seed frames / per-segment files live.
+
+    Default: ComfyUI's output folder. Set the environment variable LVC_WORK_DIR to keep these
+    intermediate files elsewhere (e.g. on Colab, so the output-folder sync only sees the final video).
+    """
+    return os.environ.get("LVC_WORK_DIR") or folder_paths.get_output_directory()
+
+
+def _final_path(chain_id):
+    """The finished video always goes to the normal output folder."""
+    out_dir = core.chain_dir(folder_paths.get_output_directory(), chain_id)
+    os.makedirs(out_dir, exist_ok=True)
+    return os.path.join(out_dir, f"final_{time.strftime('%Y%m%d_%H%M%S')}.mp4")
+
+
 def _server_info():
     from server import PromptServer
     srv = PromptServer.instance
@@ -73,7 +89,7 @@ class LVCSegmentStart:
         return float("nan")  # must re-evaluate on EVERY run, otherwise ComfyUI would cache segment 0 forever
 
     def run(self, initial_image, chain_id, total_segments, prompts):
-        root = folder_paths.get_output_directory()
+        root = _work_root()
         init_u8 = _to_u8(initial_image[0])
         cdir, state, index, seed_u8, note = core.begin_segment(root, chain_id, init_u8, total_segments)
         if note:
@@ -129,7 +145,7 @@ class LVCSegmentSave:
     def run(self, images, chain_id, segment_index, total_segments, fps, tail_trim, segment_crf, final_crf,
             auto_requeue, randomize_seeds, audio=None, prompt=None, extra_pnginfo=None):
         root = folder_paths.get_output_directory()
-        cdir = core.chain_dir(root, chain_id)
+        cdir = core.chain_dir(_work_root(), chain_id)
         state = core.load_state(cdir)
         if state is None:
             raise RuntimeError(f"{TAG} no state for chain '{chain_id}'. Is the LVC Segment Start node connected "
@@ -151,8 +167,7 @@ class LVCSegmentSave:
         is_last = segment_index + 1 >= int(total_segments)
         ui = {}
         if is_last:
-            stamp = time.strftime("%Y%m%d_%H%M%S")
-            out_path = os.path.join(cdir, f"final_{stamp}.mp4")
+            out_path = _final_path(chain_id)
             out_path, n = core.stitch(cdir, state, out_path, final_crf, log=lambda m: print(m))
             state["done"] = True
             state["final_video"] = os.path.basename(out_path)
@@ -204,11 +219,11 @@ class LVCStitch:
 
     def run(self, chain_id, final_crf):
         root = folder_paths.get_output_directory()
-        cdir = core.chain_dir(root, chain_id)
+        cdir = core.chain_dir(_work_root(), chain_id)
         state = core.load_state(cdir)
         if state is None:
             raise RuntimeError(f"{TAG} no chain named '{chain_id}' in {cdir}")
-        out_path = os.path.join(cdir, f"final_{time.strftime('%Y%m%d_%H%M%S')}.mp4")
+        out_path = _final_path(chain_id)
         out_path, n = core.stitch(cdir, state, out_path, final_crf, log=lambda m: print(m))
         print(f"{TAG} stitched {len(state['segments'])} segments, {n} frames -> {out_path}")
         rel = os.path.relpath(out_path, root)

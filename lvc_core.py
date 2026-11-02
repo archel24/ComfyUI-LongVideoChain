@@ -259,7 +259,7 @@ def stitch(cdir, state, out_path, final_crf=16, preset="medium", log=print):
         if any(s["sample_rate"] != sr for s in audio_segs):
             raise ValueError("[LongVideoChain] segments have different audio sample rates.")
 
-    part = out_path + ".part"
+    part = out_path + ".tmp"  # '.tmp' so sync tools that skip temp files never upload a half-written video
     container = av.open(part, mode="w", format="mp4", options={"movflags": "+faststart"})
     try:
         vs = container.add_stream("libx264", rate=fps, options={"crf": str(int(final_crf)), "preset": preset})
