@@ -37,7 +37,7 @@ def _work_root():
 
 def _final_path(chain_id):
     """The finished video always goes to the normal output folder."""
-    out_dir = core.chain_dir(folder_paths.get_output_directory(), chain_id)
+    out_dir = core.chain_base(folder_paths.get_output_directory(), chain_id)
     os.makedirs(out_dir, exist_ok=True)
     return os.path.join(out_dir, f"final_{time.strftime('%Y%m%d_%H%M%S')}.mp4")
 
@@ -169,9 +169,7 @@ class LVCSegmentSave:
         if is_last:
             out_path = _final_path(chain_id)
             out_path, n = core.stitch(cdir, state, out_path, final_crf, log=lambda m: print(m))
-            state["done"] = True
-            state["final_video"] = os.path.basename(out_path)
-            core.save_state(cdir, state)
+            core.mark_done(cdir, os.path.basename(out_path))
             status = f"DONE: {len(state['segments'])} segments, {n} frames -> {out_path}"
             rel = os.path.relpath(out_path, root)
             ui = {"images": [{"filename": os.path.basename(out_path), "subfolder": os.path.dirname(rel), "type": "output"}],

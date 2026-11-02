@@ -25,7 +25,7 @@ segmen disambung menjadi satu video (dengan audio).
 ## Menghentikan / melanjutkan
 * **Berhenti**: Cancel run yang sedang jalan + kosongkan antrean. Atau buat file kosong bernama `STOP` di folder chain.
 * **Lanjut** setelah error/berhenti: cukup tekan Run lagi dengan `chain_id` yang sama. Segmen yang sudah selesai tidak diulang.
-* **Mulai ulang**: ganti `chain_id`, atau ganti gambar awal (rantai lama otomatis dipindah ke folder `..__archived_..`, tidak dihapus). Rantai yang sudah selesai juga otomatis diarsipkan saat Run lagi.
+* **Mulai ulang**: ganti `chain_id`, atau ganti gambar awal. Rantai baru dibuat di folder generasi baru (`<chain_id>__g2`, `__g3`, ...); folder lama tidak disentuh atau dihapus. Menekan Run pada rantai yang sudah selesai juga memulai generasi baru.
 
 ## Tentang "frame terakhir yang belum jadi"
 Node Save mengambil frame dari **output VAE Decode** (setelah sampling selesai), bukan dari preview/latent
@@ -39,11 +39,16 @@ beberapa frame terakhir dibuang dan benih diambil dari frame yang lebih bersih (
 * Semua segmen disambung dengan encode tunggal di akhir (`final_crf`, default 16). File antara memakai `segment_crf` (default 12).
 * Jika satu segmen resolusinya berbeda, frame-nya diubah ukurannya mengikuti segmen pertama.
 
-## Folder kerja terpisah (opsional, berguna di Colab)
-Secara default semua file kerja (state, frame benih, video per segmen) disimpan di
-`output/long_video_chain/<chain_id>/`. Jika folder output Anda disinkronkan ke tempat lain (mis. Google Drive),
-set variabel lingkungan `LVC_WORK_DIR` ke folder lokal lain sebelum menjalankan ComfyUI. File kerja akan
-disimpan di sana, dan **hanya video akhir** yang ditaruh di folder output.
+## Folder kerja terpisah & pemulihan (berguna di Colab)
+Secara default semua file kerja disimpan di `output/long_video_chain/<chain_id>/`. Set variabel lingkungan
+`LVC_WORK_DIR` ke folder lain jika folder output Anda disinkronkan ke tempat lain; file kerja disimpan di sana
+dan **hanya video akhir** ditaruh di folder output.
+
+Semua file kerja ditulis **sekali dan tidak pernah diubah** (`state_0000.json`, `state_0001.json`, ... satu per segmen;
+`done.json` saat selesai). Jadi aman disalin/disinkronkan ke penyimpanan yang tidak menimpa file (mis. Drive yang
+menyimpan "nama (2).ext" bila isi berubah). Jika folder kerja dipulihkan di mesin baru, rantai langsung lanjut dari
+segmen berikutnya dengan frame terakhir yang sama persis. Jika ada file yang belum selesai terunduh, node berhenti
+dengan pesan jelas (bukan melanjutkan dengan data yang salah).
 
 ## Batasan yang perlu diketahui
 * Kualitas bisa pelan-pelan bergeser (warna/detail) setelah banyak segmen, karena tiap segmen dimulai dari satu gambar. Gambar referensi (wajah dsb.) di workflow sengaja tetap memakai gambar **asli**, bukan frame hasil, supaya identitas tidak ikut melenceng.

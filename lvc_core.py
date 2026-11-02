@@ -3,15 +3,19 @@
 Deliberately free of ComfyUI / torch imports so it can be unit-tested on its own.
 Only needs: numpy, Pillow, PyAV (``av``) -- all of which ComfyUI already depends on.
 
-Layout on disk (inside ComfyUI's output folder)::
+Layout on disk (inside the work dir)::
 
-    long_video_chain/<chain_id>/
-        state.json            <- the single source of truth for the chain
+    long_video_chain/<chain_id>/            <- generation 1 (a new chain with the same id -> <chain_id>__g2, __g3 ...)
+        state_0000.json ... state_0004.json <- one snapshot per completed segment; the highest number is current
+        done.json                           <- written once when the chain is finished
         seed_0001.png         <- LOSSLESS last decoded frame of segment 0 (seed for segment 1)
         seg_0000.mp4          <- video-only, high-quality H.264 of segment 0
         seg_0000.npy          <- float32 audio of segment 0, shape (channels, samples)
-        ...
-        final_<timestamp>.mp4 <- stitched result
+
+Every file is written ONCE and never modified afterwards. That makes the folder safe to mirror to
+storage that never overwrites (e.g. a Drive bridge that stores "name (2).ext" for changed files),
+and lets a chain be resumed on a brand-new machine after the folder has been copied back.
+The finished video is written to the normal output folder under long_video_chain/<chain_id>/.
 """
 
 import copy
@@ -32,6 +36,7 @@ from PIL import Image
 STATE_NAME = "state.json"
 STATE_VERSION = 1
 STOP_NAME = "STOP"
+DONE_NAME = "done.json"
 
 
 # --------------------------------------------------------------------------- paths / state
@@ -41,39 +46,81 @@ def sanitize_chain_id(chain_id):
     return cid or "chain"
 
 
-def chain_dir(output_root, chain_id):
-    return os.path.join(output_root, "long_video_chain", sanitize_chain_id(chain_id))
+def chain_base(root, chain_id):
+    return os.path.join(root, "long_video_chain", sanitize_chain_id(chain_id))
+
+
+def list_generations(root, chain_id):
+    base = chain_base(root, chain_id)
+    parent, name = os.path.dirname(base), os.path.basename(base)
+    gens = []
+    if os.path.isdir(parent):
+        for d in os.listdir(parent):
+            if d == name:
+                gens.append((1, d))
+            else:
+                m = re.fullmatch(re.escape(name) + r"__g(\d+)", d)
+                if m:
+                    gens.append((int(m.group(1)), d))
+    return sorted(gens), parent
+
+
+def chain_dir(root, chain_id):
+    """Folder of the CURRENT chain for this id (highest generation), or generation 1 if none exists yet."""
+    gens, parent = list_generations(root, chain_id)
+    return os.path.join(parent, gens[-1][1]) if gens else chain_base(root, chain_id)
+
+
+def next_generation_dir(root, chain_id):
+    gens, _ = list_generations(root, chain_id)
+    n = gens[-1][0] + 1 if gens else 1
+    base = chain_base(root, chain_id)
+    return base if n == 1 else f"{base}__g{n}"
+
+
+_STATE_RE = re.compile(r"state_(\d{4})\.json")
 
 
 def load_state(cdir):
-    path = os.path.join(cdir, STATE_NAME)
-    if not os.path.isfile(path):
+    if not os.path.isdir(cdir):
         return None
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    names = [n for n in os.listdir(cdir) if _STATE_RE.fullmatch(n)]
+    if not names:
+        return None
+    with open(os.path.join(cdir, max(names)), "r", encoding="utf-8") as f:
+        state = json.load(f)
+    state["done"], state["final_video"] = False, None
+    done_path = os.path.join(cdir, DONE_NAME)
+    if os.path.isfile(done_path):
+        with open(done_path, "r", encoding="utf-8") as f:
+            state["done"] = True
+            state["final_video"] = json.load(f).get("final_video")
+    return state
+
+
+def _write_json_once(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2)
+    os.replace(tmp, path)  # atomic: never a half-written file
 
 
 def save_state(cdir, state):
-    os.makedirs(cdir, exist_ok=True)
+    """Writes state_<next_index>.json (a new file per completed segment, never rewritten)."""
     state["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    tmp = os.path.join(cdir, STATE_NAME + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-    os.replace(tmp, os.path.join(cdir, STATE_NAME))  # atomic: never a half-written state
+    _write_json_once(os.path.join(cdir, f"state_{int(state['next_index']):04d}.json"), state)
 
 
-def archive_chain(cdir):
-    """Move an old chain aside (never deletes anything)."""
-    if not os.path.isdir(cdir):
-        return None
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    dest = f"{cdir}__archived_{stamp}"
-    n = 1
-    while os.path.exists(dest):
-        dest = f"{cdir}__archived_{stamp}_{n}"
-        n += 1
-    os.rename(cdir, dest)
-    return dest
+def mark_done(cdir, final_name):
+    _write_json_once(os.path.join(cdir, DONE_NAME), {"final_video": final_name, "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+
+
+def missing_files(cdir, state):
+    need = [state["last_frame"]] if state.get("last_frame") else []
+    for sg in state.get("segments", []):
+        need += [sg["video"], sg["seed_frame"]] + ([sg["audio"]] if sg.get("audio") else [])
+    return sorted({n for n in need if not os.path.isfile(os.path.join(cdir, n))})
 
 
 def image_signature(img_u8):
@@ -98,35 +145,30 @@ def begin_segment(output_root, chain_id, initial_u8, total_segments):
     Returns (cdir, state, index, seed_u8, note).
     * first run / new chain  -> index 0, seed = initial image
     * later runs             -> index N, seed = lossless PNG saved by the previous segment
-    * finished chain, or a different starting image -> old chain is archived, new chain begins
+    * finished chain, or a different starting image -> the old folder is left untouched and a new
+      generation folder (<chain_id>__g2, ...) is started
     """
     cdir = chain_dir(output_root, chain_id)
     sig = image_signature(initial_u8)
     state = load_state(cdir)
     note = ""
 
-    if state is not None:
-        if state.get("done"):
-            dest = archive_chain(cdir)
-            note = f"previous chain was finished -> archived to {os.path.basename(dest)}, starting a new chain"
-            state = None
-        elif state.get("initial_sig") != sig:
-            if state.get("next_index", 0) > 0:
-                dest = archive_chain(cdir)
-                note = f"starting image changed -> archived old chain to {os.path.basename(dest)}, starting a new chain"
-            state = None
+    if state is not None and (state.get("done") or state.get("initial_sig") != sig):
+        why = "previous chain was finished" if state.get("done") else "starting image changed"
+        old = os.path.basename(cdir)
+        cdir = next_generation_dir(output_root, chain_id)
+        note = f"{why} -> leaving '{old}' untouched, starting a new chain in '{os.path.basename(cdir)}'"
+        state = None
 
-    if state is None:
+    created = state is None
+    if created:
         state = {
             "version": STATE_VERSION,
             "chain_id": sanitize_chain_id(chain_id),
             "initial_sig": sig,
-            "total_segments": int(total_segments),
             "fps": None,
             "next_index": 0,
             "last_frame": None,
-            "done": False,
-            "final_video": None,
             "segments": [],
         }
     state["total_segments"] = int(total_segments)
@@ -139,16 +181,22 @@ def begin_segment(output_root, chain_id, initial_u8, total_segments):
             f"finish now, or change chain_id to start over."
         )
 
-    os.makedirs(cdir, exist_ok=True)
-    save_state(cdir, state)
+    if created:
+        os.makedirs(cdir, exist_ok=True)
+        save_state(cdir, state)
 
     if index == 0:
         seed = initial_u8
     else:
-        seed_path = os.path.join(cdir, state["last_frame"])
-        if not os.path.isfile(seed_path):
-            raise FileNotFoundError(f"[LongVideoChain] seed frame missing: {seed_path}")
-        seed = np.array(Image.open(seed_path).convert("RGB"))
+        missing = missing_files(cdir, state)
+        if missing:
+            raise FileNotFoundError(
+                f"[LongVideoChain] chain '{state['chain_id']}' needs {len(missing)} file(s) that are not here: "
+                f"{', '.join(missing[:6])}{' ...' if len(missing) > 6 else ''} (folder: {cdir}). If this folder is "
+                f"restored from a sync (e.g. Google Drive), wait until the download has finished (watch for "
+                f"'skipped (> N MB)' warnings), then press Run again."
+            )
+        seed = np.array(Image.open(os.path.join(cdir, state["last_frame"])).convert("RGB"))
     return cdir, state, index, seed, note
 
 
