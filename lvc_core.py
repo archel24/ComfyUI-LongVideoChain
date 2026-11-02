@@ -5,7 +5,7 @@ Only needs: numpy, Pillow, PyAV (``av``) -- all of which ComfyUI already depends
 
 Layout on disk (inside the work dir)::
 
-    long_video_chain/<chain_id>/            <- generation 1 (a new chain with the same id -> <chain_id>__g2, __g3 ...)
+    long_video_chain/<chain_id>__<YYYYmmdd_HHMMSS>/   <- one folder per chain START (a new Run never touches an older one)
         state_0000.json ... state_0004.json <- one snapshot per completed segment; the highest number is current
         done.json                           <- written once when the chain is finished
         seed_0001.png         <- LOSSLESS last decoded frame of segment 0 (seed for segment 1)
@@ -50,32 +50,68 @@ def chain_base(root, chain_id):
     return os.path.join(root, "long_video_chain", sanitize_chain_id(chain_id))
 
 
+# A chain folder is named <chain_id>__<YYYYmmdd_HHMMSS>[_n]. (Older versions used <chain_id> and <chain_id>__gN;
+# those are still understood and simply count as older.)
+_GEN_SUFFIX = r"__(?:g(\d+)|(\d{8}_\d{6})(?:_(\d+))?)"
+
+
+def is_generation_name(name):
+    return re.search(_GEN_SUFFIX + "$", name) is not None
+
+
+def _gen_key(name, base_name):
+    if name == base_name:
+        return (0, "", 0)
+    m = re.fullmatch(re.escape(base_name) + _GEN_SUFFIX, name)
+    if not m:
+        return None
+    if m.group(1):
+        return (1, "", int(m.group(1)))
+    return (2, m.group(2), int(m.group(3) or 1))
+
+
 def list_generations(root, chain_id):
+    """Chain folders for this id, oldest -> newest. Returns (names, parent_dir)."""
     base = chain_base(root, chain_id)
     parent, name = os.path.dirname(base), os.path.basename(base)
-    gens = []
+    found = []
     if os.path.isdir(parent):
         for d in os.listdir(parent):
-            if d == name:
-                gens.append((1, d))
-            else:
-                m = re.fullmatch(re.escape(name) + r"__g(\d+)", d)
-                if m:
-                    gens.append((int(m.group(1)), d))
-    return sorted(gens), parent
+            key = _gen_key(d, name)
+            if key and os.path.isdir(os.path.join(parent, d)):
+                found.append((key, d))
+    return [d for _, d in sorted(found)], parent
 
 
-def chain_dir(root, chain_id):
-    """Folder of the CURRENT chain for this id (highest generation), or generation 1 if none exists yet."""
-    gens, parent = list_generations(root, chain_id)
-    return os.path.join(parent, gens[-1][1]) if gens else chain_base(root, chain_id)
+def latest_chain_dir(root, chain_id):
+    """Newest chain folder that actually holds a state, or None."""
+    names, parent = list_generations(root, chain_id)
+    for d in reversed(names):
+        if load_state(os.path.join(parent, d)) is not None:
+            return os.path.join(parent, d)
+    return None
 
 
-def next_generation_dir(root, chain_id):
-    gens, _ = list_generations(root, chain_id)
-    n = gens[-1][0] + 1 if gens else 1
+def new_generation_dir(root, chain_id):
     base = chain_base(root, chain_id)
-    return base if n == 1 else f"{base}__g{n}"
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    cand, n = f"{base}__{stamp}", 1
+    while os.path.exists(cand):
+        n += 1
+        cand = f"{base}__{stamp}_{n}"
+    return cand
+
+
+def resolve_chain_dir(root, name):
+    """`name` is either an exact chain-folder name (what the Start node hands to Save) or a plain chain id
+    (-> its newest chain)."""
+    name = sanitize_chain_id(name)
+    if is_generation_name(name):
+        return os.path.join(root, "long_video_chain", name)
+    return latest_chain_dir(root, name) or chain_base(root, name)
+
+
+chain_dir = resolve_chain_dir  # backwards-compatible name
 
 
 _STATE_RE = re.compile(r"state_(\d{4})\.json")
@@ -139,29 +175,34 @@ def pick_prompt(prompts_text, index):
 
 # --------------------------------------------------------------------------- start of a segment
 
-def begin_segment(output_root, chain_id, initial_u8, total_segments):
+def begin_segment(output_root, chain_id, initial_u8, total_segments, mode="new_chain"):
     """Decide which segment is next and which image seeds it.
 
-    Returns (cdir, state, index, seed_u8, note).
-    * first run / new chain  -> index 0, seed = initial image
-    * later runs             -> index N, seed = lossless PNG saved by the previous segment
-    * finished chain, or a different starting image -> the old folder is left untouched and a new
-      generation folder (<chain_id>__g2, ...) is started
-    """
-    cdir = chain_dir(output_root, chain_id)
-    sig = image_signature(initial_u8)
-    state = load_state(cdir)
-    note = ""
+    mode="new_chain" : ALWAYS start a fresh chain folder from the initial image. Nothing from older runs
+                       (even with the same chain_id and image) is ever reused.
+    mode="continue"  : continue the newest unfinished chain of this id (used by the automatic re-queue and
+                       for resuming by hand). If there is none, or it is finished, a new chain is started.
 
-    if state is not None and (state.get("done") or state.get("initial_sig") != sig):
-        why = "previous chain was finished" if state.get("done") else "starting image changed"
-        old = os.path.basename(cdir)
-        cdir = next_generation_dir(output_root, chain_id)
-        note = f"{why} -> leaving '{old}' untouched, starting a new chain in '{os.path.basename(cdir)}'"
-        state = None
+    Returns (cdir, state, index, seed_u8, note).
+    """
+    if mode not in ("new_chain", "continue"):
+        raise ValueError(f"[LongVideoChain] unknown mode {mode!r}")
+    sig = image_signature(initial_u8)
+    note, cdir, state = "", None, None
+
+    if mode == "continue":
+        cdir = latest_chain_dir(output_root, chain_id)
+        state = load_state(cdir) if cdir else None
+        if state is not None and state.get("done"):
+            note = f"chain '{os.path.basename(cdir)}' is already finished -> starting a new chain"
+            cdir, state = None, None
+        elif state is not None and state.get("initial_sig") != sig:
+            note = ("WARNING: the starting image differs from the one this chain was started with; continuing "
+                    "anyway (set mode=new_chain to start over)")
 
     created = state is None
     if created:
+        cdir = new_generation_dir(output_root, chain_id)
         state = {
             "version": STATE_VERSION,
             "chain_id": sanitize_chain_id(chain_id),
@@ -176,9 +217,8 @@ def begin_segment(output_root, chain_id, initial_u8, total_segments):
 
     if index >= int(total_segments):
         raise ValueError(
-            f"[LongVideoChain] chain '{state['chain_id']}' already has {index} segment(s) but total_segments="
-            f"{total_segments}. Increase total_segments to continue, or use the 'LVC Stitch' node to "
-            f"finish now, or change chain_id to start over."
+            f"[LongVideoChain] chain '{os.path.basename(cdir)}' already has {index} segment(s) but total_segments="
+            f"{total_segments}. Increase total_segments to continue, or use the 'LVC Stitch' node to finish now."
         )
 
     if created:
@@ -191,10 +231,10 @@ def begin_segment(output_root, chain_id, initial_u8, total_segments):
         missing = missing_files(cdir, state)
         if missing:
             raise FileNotFoundError(
-                f"[LongVideoChain] chain '{state['chain_id']}' needs {len(missing)} file(s) that are not here: "
+                f"[LongVideoChain] chain '{os.path.basename(cdir)}' needs {len(missing)} file(s) that are not here: "
                 f"{', '.join(missing[:6])}{' ...' if len(missing) > 6 else ''} (folder: {cdir}). If this folder is "
                 f"restored from a sync (e.g. Google Drive), wait until the download has finished (watch for "
-                f"'skipped (> N MB)' warnings), then press Run again."
+                f"'skipped (> N MB)' warnings), then press Run again with mode=continue."
             )
         seed = np.array(Image.open(os.path.join(cdir, state["last_frame"])).convert("RGB"))
     return cdir, state, index, seed, note
@@ -397,6 +437,11 @@ def server_base_url(address, port, tls=False):
 def requeue_prompt(base_url, prompt, client_id=None, extra_pnginfo=None, randomize_seeds=True, timeout=30):
     """Queue the very same workflow again through ComfyUI's own /prompt endpoint."""
     new_prompt = copy.deepcopy(prompt)
+    for node in new_prompt.values():  # the queued runs must CONTINUE this chain, not start a new one
+        if isinstance(node, dict) and node.get("class_type") == "LVCSegmentStart":
+            inputs = node.setdefault("inputs", {})
+            if not isinstance(inputs.get("mode"), list):
+                inputs["mode"] = "continue"
     if randomize_seeds:
         _randomize_seeds(new_prompt)
     payload = {"prompt": new_prompt, "extra_data": {}}

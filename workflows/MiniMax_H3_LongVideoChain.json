@@ -1739,7 +1739,8 @@
       "widgets_values": [
         "my_video",
         5,
-        "example prompt"
+        "example prompt",
+        "new_chain"
       ],
       "color": "#2a6",
       "bgcolor": "#153"

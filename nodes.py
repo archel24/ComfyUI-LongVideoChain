@@ -81,6 +81,12 @@ class LVCSegmentStart:
                     "tooltip": "One prompt per segment, separated by a line containing only ---. "
                                "If there are fewer prompts than segments the last one is reused.",
                 }),
+                "mode": (["new_chain", "continue"], {
+                    "default": "new_chain",
+                    "tooltip": "new_chain: every Run you press starts a brand-new video from the initial image. "
+                               "continue: resume the newest unfinished chain (the automatic follow-up runs set "
+                               "this by themselves; use it by hand only to resume after an error).",
+                }),
             }
         }
 
@@ -88,16 +94,16 @@ class LVCSegmentStart:
     def IS_CHANGED(cls, **kwargs):
         return float("nan")  # must re-evaluate on EVERY run, otherwise ComfyUI would cache segment 0 forever
 
-    def run(self, initial_image, chain_id, total_segments, prompts):
+    def run(self, initial_image, chain_id, total_segments, prompts, mode="new_chain"):
         root = _work_root()
         init_u8 = _to_u8(initial_image[0])
-        cdir, state, index, seed_u8, note = core.begin_segment(root, chain_id, init_u8, total_segments)
+        cdir, state, index, seed_u8, note = core.begin_segment(root, chain_id, init_u8, total_segments, mode)
         if note:
             print(f"{TAG} {note}")
-        print(f"{TAG} chain '{state['chain_id']}': starting segment {index + 1}/{total_segments}"
+        print(f"{TAG} chain '{os.path.basename(cdir)}' (mode={mode}): starting segment {index + 1}/{total_segments}"
               f" ({'original image' if index == 0 else 'lossless last frame of segment ' + str(index)})")
         image = initial_image if index == 0 else _from_u8(seed_u8)
-        return (image, core.pick_prompt(prompts, index), index, int(total_segments), chain_id)
+        return (image, core.pick_prompt(prompts, index), index, int(total_segments), os.path.basename(cdir))
 
 
 # --------------------------------------------------------------------------- Save
@@ -116,7 +122,7 @@ class LVCSegmentSave:
         return {
             "required": {
                 "images": ("IMAGE",),
-                "chain_id": ("STRING", {"default": "my_video", "forceInput": True}),  # wired from Start
+                "chain_id": ("STRING", {"default": "my_video", "forceInput": True}),  # exact chain folder, wired from Start
                 "segment_index": ("INT", {"default": 0, "min": 0, "max": 100000, "forceInput": True}),
                 "total_segments": ("INT", {"default": 5, "min": 1, "max": 1000, "forceInput": True}),
                 "fps": ("INT", {"default": 24, "min": 1, "max": 120}),
@@ -145,14 +151,15 @@ class LVCSegmentSave:
     def run(self, images, chain_id, segment_index, total_segments, fps, tail_trim, segment_crf, final_crf,
             auto_requeue, randomize_seeds, audio=None, prompt=None, extra_pnginfo=None):
         root = folder_paths.get_output_directory()
-        cdir = core.chain_dir(_work_root(), chain_id)
+        cdir = core.resolve_chain_dir(_work_root(), chain_id)
         state = core.load_state(cdir)
         if state is None:
-            raise RuntimeError(f"{TAG} no state for chain '{chain_id}'. Is the LVC Segment Start node connected "
-                               f"and using the same chain_id?")
+            raise RuntimeError(f"{TAG} no state in '{cdir}'. Is the chain_id input of this node wired from the "
+                               f"LVC Segment Start node?")
         if int(state["next_index"]) != int(segment_index):
             raise RuntimeError(f"{TAG} out of sync: state expects segment {state['next_index']} but this run is "
-                               f"segment {segment_index}. Make sure only one run is processed at a time.")
+                               f"segment {segment_index} (folder: {cdir}). Something else changed this folder while the run was in "
+                               f"progress (a second run, or files restored by a sync).")
 
         frames = _to_u8(images)
         a_np, sr = None, None
@@ -167,7 +174,7 @@ class LVCSegmentSave:
         is_last = segment_index + 1 >= int(total_segments)
         ui = {}
         if is_last:
-            out_path = _final_path(chain_id)
+            out_path = _final_path(state['chain_id'])
             out_path, n = core.stitch(cdir, state, out_path, final_crf, log=lambda m: print(m))
             core.mark_done(cdir, os.path.basename(out_path))
             status = f"DONE: {len(state['segments'])} segments, {n} frames -> {out_path}"
@@ -217,11 +224,11 @@ class LVCStitch:
 
     def run(self, chain_id, final_crf):
         root = folder_paths.get_output_directory()
-        cdir = core.chain_dir(_work_root(), chain_id)
+        cdir = core.resolve_chain_dir(_work_root(), chain_id)
         state = core.load_state(cdir)
         if state is None:
             raise RuntimeError(f"{TAG} no chain named '{chain_id}' in {cdir}")
-        out_path = _final_path(chain_id)
+        out_path = _final_path(state['chain_id'])
         out_path, n = core.stitch(cdir, state, out_path, final_crf, log=lambda m: print(m))
         print(f"{TAG} stitched {len(state['segments'])} segments, {n} frames -> {out_path}")
         rel = os.path.relpath(out_path, root)

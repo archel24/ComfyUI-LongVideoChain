@@ -5,27 +5,36 @@ otomatis menjadi frame pertama run N+1, run berikutnya diantrekan otomatis, dan 
 segmen disambung menjadi satu video (dengan audio).
 
 ## Instalasi
-1. Salin folder `ComfyUI-LongVideoChain` ke `ComfyUI/custom_nodes/`
+1. Salin folder `ComfyUI-LongVideoChain` ke `ComfyUI/custom_nodes/` (atau install lewat Git URL di ComfyUI Manager).
 2. Restart ComfyUI. Tidak ada dependensi tambahan (memakai `av`, `Pillow`, `numpy` yang sudah dibawa ComfyUI).
-3. Buka `workflows/MiniMax_H3_LongVideoChain.json` (workflow Anda yang sudah disambungkan).
+3. Buka `workflows/MiniMax_H3_LongVideoChain.json` (workflow yang sudah disambungkan).
 
 ## Node
 | Node | Fungsi |
 |---|---|
-| **LVC Segment Start** | Run 1 → gambar asli Anda. Run 2+ → frame terakhir run sebelumnya (PNG lossless). Juga memilih prompt untuk segmen ini. |
+| **LVC Segment Start** | Segmen 1 → gambar asli Anda. Segmen 2+ → frame terakhir segmen sebelumnya (PNG lossless). Juga memilih prompt untuk segmen ini. |
 | **LVC Segment Save** | Menerima hasil **VAE Decode** (frame yang sudah selesai dirender) + audio. Menyimpan segmen, menyimpan frame benih, mengantre run berikutnya, dan di segmen terakhir menyambung semuanya. |
 | **LVC Stitch** | Menyambung segmen yang sudah ada sekarang juga (selesai lebih awal / re-stitch). |
 
 ## Cara pakai
-1. Isi `total_segments` di **Start** (mis. 5 segmen × ±20 dtk ≈ 100 dtk).
+1. Isi `total_segments` di **Start** (mis. 5 segmen × ±20 dtk ≈ 100 dtk). Durasi/`length` di workflow = durasi **per segmen**.
 2. Isi `prompts` di **Start**: satu prompt per segmen, dipisah baris berisi `---`. Jika prompt lebih sedikit dari segmen, prompt terakhir dipakai ulang.
-3. Tekan **Run satu kali** (batch count = 1). Sisanya otomatis.
+3. Biarkan `mode = new_chain`, lalu tekan **Run satu kali** (batch count = 1). Sisanya otomatis.
 4. Hasil: `output/long_video_chain/<chain_id>/final_<waktu>.mp4`
 
+## `mode` di node Start
+| mode | Arti |
+|---|---|
+| **new_chain** (default) | Setiap kali Anda menekan Run, video **baru** dimulai dari gambar awal, di folder baru `long_video_chain/<chain_id>__<tanggal_jam>`. Sisa file dari percobaan lama (walau `chain_id` dan gambarnya sama) **tidak pernah ikut terpakai**. |
+| **continue** | Melanjutkan rantai terbaru yang belum selesai. Run otomatis berikutnya diantrekan dengan mode ini oleh node Save (Anda tidak perlu mengubah apa pun). Pakai manual hanya untuk **melanjutkan setelah error/berhenti**. Jika rantai terbaru sudah selesai, otomatis dimulai rantai baru. |
+
+Node Save terkunci ke folder rantai yang diberikan Start, jadi folder lain (run kedua, file hasil sinkronisasi) tidak bisa
+mengacaukan rantai yang sedang berjalan.
+
 ## Menghentikan / melanjutkan
-* **Berhenti**: Cancel run yang sedang jalan + kosongkan antrean. Atau buat file kosong bernama `STOP` di folder chain.
-* **Lanjut** setelah error/berhenti: cukup tekan Run lagi dengan `chain_id` yang sama. Segmen yang sudah selesai tidak diulang.
-* **Mulai ulang**: ganti `chain_id`, atau ganti gambar awal. Rantai baru dibuat di folder generasi baru (`<chain_id>__g2`, `__g3`, ...); folder lama tidak disentuh atau dihapus. Menekan Run pada rantai yang sudah selesai juga memulai generasi baru.
+* **Berhenti**: Cancel run yang sedang jalan + kosongkan antrean. Atau buat file kosong bernama `STOP` di folder rantai.
+* **Lanjut** setelah error/berhenti: ubah `mode` ke `continue`, lalu Run. Segmen yang sudah selesai tidak diulang. Setelah selesai, kembalikan ke `new_chain` untuk video berikutnya.
+* **Mulai ulang**: `mode = new_chain` lalu Run. Folder lama tidak disentuh atau dihapus (hapus manual bila tidak perlu).
 
 ## Tentang "frame terakhir yang belum jadi"
 Node Save mengambil frame dari **output VAE Decode** (setelah sampling selesai), bukan dari preview/latent
@@ -40,17 +49,18 @@ beberapa frame terakhir dibuang dan benih diambil dari frame yang lebih bersih (
 * Jika satu segmen resolusinya berbeda, frame-nya diubah ukurannya mengikuti segmen pertama.
 
 ## Folder kerja terpisah & pemulihan (berguna di Colab)
-Secara default semua file kerja disimpan di `output/long_video_chain/<chain_id>/`. Set variabel lingkungan
+Secara default semua file kerja disimpan di `output/long_video_chain/<chain_id>__<waktu>/`. Set variabel lingkungan
 `LVC_WORK_DIR` ke folder lain jika folder output Anda disinkronkan ke tempat lain; file kerja disimpan di sana
 dan **hanya video akhir** ditaruh di folder output.
 
 Semua file kerja ditulis **sekali dan tidak pernah diubah** (`state_0000.json`, `state_0001.json`, ... satu per segmen;
 `done.json` saat selesai). Jadi aman disalin/disinkronkan ke penyimpanan yang tidak menimpa file (mis. Drive yang
-menyimpan "nama (2).ext" bila isi berubah). Jika folder kerja dipulihkan di mesin baru, rantai langsung lanjut dari
-segmen berikutnya dengan frame terakhir yang sama persis. Jika ada file yang belum selesai terunduh, node berhenti
-dengan pesan jelas (bukan melanjutkan dengan data yang salah).
+menyimpan "nama (2).ext" bila isi berubah). Jika folder kerja dipulihkan di mesin baru, `mode = continue` langsung
+lanjut dari segmen berikutnya dengan frame terakhir yang sama persis. Jika ada file yang belum selesai terunduh, node
+berhenti dengan pesan jelas (bukan melanjutkan dengan data yang salah).
 
 ## Batasan yang perlu diketahui
 * Kualitas bisa pelan-pelan bergeser (warna/detail) setelah banyak segmen, karena tiap segmen dimulai dari satu gambar. Gambar referensi (wajah dsb.) di workflow sengaja tetap memakai gambar **asli**, bukan frame hasil, supaya identitas tidak ikut melenceng.
 * Audio dibuat terpisah per segmen oleh model, jadi suara/musik bisa "melompat" di sambungan.
 * Antrean otomatis memakai endpoint `/prompt` bawaan ComfyUI dari sisi server (browser tidak perlu terbuka). Seed di-random ulang tiap segmen (`randomize_seeds`).
+* Jangan menekan Run lagi selagi rantai masih berjalan; itu memulai video baru yang berjalan bersamaan dan memperebutkan GPU.
