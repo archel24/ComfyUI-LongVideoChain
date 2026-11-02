@@ -173,6 +173,31 @@ def pick_prompt(prompts_text, index):
     return blocks[min(index, len(blocks) - 1)]
 
 
+def add_prompt(previous_json, text):
+    """Append one segment's prompt to a prompt list (the list travels between nodes as a JSON string)."""
+    items = parse_prompt_list(previous_json) if previous_json else []
+    items.append(text or "")
+    return json.dumps(items, ensure_ascii=False)
+
+
+def parse_prompt_list(list_json):
+    try:
+        items = json.loads(list_json)
+        assert isinstance(items, list) and all(isinstance(x, str) for x in items)
+    except Exception:
+        raise ValueError("[LongVideoChain] prompt_list is not valid: connect it only to an LVC Prompt Segment node")
+    return items
+
+
+def pick_from_list(list_json, index):
+    """Segment N uses prompt N. A blank box (or a segment past the end) reuses the nearest earlier non-blank prompt."""
+    items = parse_prompt_list(list_json)
+    i = min(index, len(items) - 1)
+    while i >= 0 and not items[i].strip():
+        i -= 1
+    return items[i].strip() if i >= 0 else ""
+
+
 # --------------------------------------------------------------------------- start of a segment
 
 def begin_segment(output_root, chain_id, initial_u8, total_segments, mode="new_chain"):

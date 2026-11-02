@@ -13,12 +13,16 @@ segmen disambung menjadi satu video (dengan audio).
 | Node | Fungsi |
 |---|---|
 | **LVC Segment Start** | Segmen 1 → gambar asli Anda. Segmen 2+ → frame terakhir segmen sebelumnya (PNG lossless). Juga memilih prompt untuk segmen ini. |
+| **LVC Prompt Segment** | Satu kotak prompt untuk **satu** segmen. Rantai beberapa node ini, sambungkan yang terakhir ke `prompt_list` di Start. |
 | **LVC Segment Save** | Menerima hasil **VAE Decode** (frame yang sudah selesai dirender) + audio. Menyimpan segmen, menyimpan frame benih, mengantre run berikutnya, dan di segmen terakhir menyambung semuanya. |
 | **LVC Stitch** | Menyambung segmen yang sudah ada sekarang juga (selesai lebih awal / re-stitch). |
 
 ## Cara pakai
 1. Isi `total_segments` di **Start** (mis. 5 segmen × ±20 dtk ≈ 100 dtk). Durasi/`length` di workflow = durasi **per segmen**.
-2. Isi `prompts` di **Start**: satu prompt per segmen, dipisah baris berisi `---`. Jika prompt lebih sedikit dari segmen, prompt terakhir dipakai ulang.
+2. Isi prompt per segmen, pilih salah satu cara:
+   * **Kotak terpisah (disarankan untuk prompt panjang):** satu node **LVC Prompt Segment** per segmen. Node 1 tidak punya `previous`; node 2 menyambung `previous` ← node 1, dst.; node terakhir → `prompt_list` di Start. Segmen 1 memakai kotak 1, segmen 2 kotak 2, dst. Kotak kosong memakai prompt sebelumnya; jika kotak kurang dari segmen, kotak terakhir dipakai ulang. Untuk menambah segmen: salin node (Ctrl+C lalu Ctrl+Shift+V) dan sambungkan.
+   * **Satu teks:** isi `prompts` di Start, dipisah baris berisi `---` (diabaikan bila `prompt_list` tersambung).
+   Model hanya menerima prompt segmen yang sedang berjalan; prompt segmen lain tidak pernah digabung.
 3. Biarkan `mode = new_chain`, lalu tekan **Run satu kali** (batch count = 1). Sisanya otomatis.
 4. Hasil: `output/long_video_chain/<chain_id>/final_<waktu>.mp4`
 

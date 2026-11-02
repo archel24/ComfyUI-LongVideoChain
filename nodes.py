@@ -87,14 +87,21 @@ class LVCSegmentStart:
                                "continue: resume the newest unfinished chain (the automatic follow-up runs set "
                                "this by themselves; use it by hand only to resume after an error).",
                 }),
-            }
+            },
+            "optional": {
+                "prompt_list": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Connect the last 'LVC Prompt Segment' node here to give every segment its own prompt "
+                               "box. When connected, the 'prompts' text above is ignored.",
+                }),
+            },
         }
 
     @classmethod
     def IS_CHANGED(cls, **kwargs):
         return float("nan")  # must re-evaluate on EVERY run, otherwise ComfyUI would cache segment 0 forever
 
-    def run(self, initial_image, chain_id, total_segments, prompts, mode="new_chain"):
+    def run(self, initial_image, chain_id, total_segments, prompts, mode="new_chain", prompt_list=None):
         root = _work_root()
         init_u8 = _to_u8(initial_image[0])
         cdir, state, index, seed_u8, note = core.begin_segment(root, chain_id, init_u8, total_segments, mode)
@@ -103,7 +110,32 @@ class LVCSegmentStart:
         print(f"{TAG} chain '{os.path.basename(cdir)}' (mode={mode}): starting segment {index + 1}/{total_segments}"
               f" ({'original image' if index == 0 else 'lossless last frame of segment ' + str(index)})")
         image = initial_image if index == 0 else _from_u8(seed_u8)
-        return (image, core.pick_prompt(prompts, index), index, int(total_segments), os.path.basename(cdir))
+        chosen = core.pick_from_list(prompt_list, index) if prompt_list else core.pick_prompt(prompts, index)
+        return (image, chosen, index, int(total_segments), os.path.basename(cdir))
+
+
+# --------------------------------------------------------------------------- Prompt per segment
+
+class LVCPromptSegment:
+    """One prompt box for ONE segment. Chain several of these (previous -> previous) and connect the last one to
+    the 'prompt_list' input of LVC Segment Start. Segment 1 uses the first box, segment 2 the second, ...
+    Only the prompt of the current segment is ever sent to the model; they are never merged."""
+
+    CATEGORY = "LongVideoChain"
+    FUNCTION = "run"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt_list",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {"prompt": ("STRING", {"multiline": True, "default": ""})},
+            "optional": {"previous": ("STRING", {"forceInput": True,
+                                                 "tooltip": "Output of the previous 'LVC Prompt Segment' (leave empty for segment 1)."})},
+        }
+
+    def run(self, prompt, previous=None):
+        return (core.add_prompt(previous, prompt),)
 
 
 # --------------------------------------------------------------------------- Save
@@ -239,11 +271,13 @@ class LVCStitch:
 
 NODE_CLASS_MAPPINGS = {
     "LVCSegmentStart": LVCSegmentStart,
+    "LVCPromptSegment": LVCPromptSegment,
     "LVCSegmentSave": LVCSegmentSave,
     "LVCStitch": LVCStitch,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LVCSegmentStart": "LVC Segment Start (seed frame)",
+    "LVCPromptSegment": "LVC Prompt Segment (1 box per segment)",
     "LVCSegmentSave": "LVC Segment Save (+auto next / stitch)",
     "LVCStitch": "LVC Stitch (finish now)",
 }

@@ -1,8 +1,8 @@
 {
   "id": "4eefd306-ba7e-4827-8f8b-d37ee9713814",
   "revision": 0,
-  "last_node_id": 222,
-  "last_link_id": 425,
+  "last_node_id": 225,
+  "last_link_id": 428,
   "nodes": [
     {
       "id": 128,
@@ -1693,6 +1693,12 @@
           "name": "initial_image",
           "type": "IMAGE",
           "link": 419
+        },
+        {
+          "name": "prompt_list",
+          "type": "STRING",
+          "shape": 7,
+          "link": 428
         }
       ],
       "outputs": [
@@ -1805,6 +1811,122 @@
         16,
         true,
         true
+      ],
+      "color": "#2a6",
+      "bgcolor": "#153"
+    },
+    {
+      "id": 223,
+      "type": "LVCPromptSegment",
+      "pos": [
+        -2380,
+        5900
+      ],
+      "size": [
+        420,
+        220
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "prompt_list",
+          "type": "STRING",
+          "links": [
+            426
+          ]
+        }
+      ],
+      "title": "LVC Prompt Segment 1",
+      "properties": {
+        "Node name for S&R": "LVCPromptSegment"
+      },
+      "widgets_values": [
+        "prompt segmen 1"
+      ],
+      "color": "#2a6",
+      "bgcolor": "#153"
+    },
+    {
+      "id": 224,
+      "type": "LVCPromptSegment",
+      "pos": [
+        -1940,
+        5900
+      ],
+      "size": [
+        420,
+        220
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "previous",
+          "type": "STRING",
+          "shape": 7,
+          "link": 426
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt_list",
+          "type": "STRING",
+          "links": [
+            427
+          ]
+        }
+      ],
+      "title": "LVC Prompt Segment 2",
+      "properties": {
+        "Node name for S&R": "LVCPromptSegment"
+      },
+      "widgets_values": [
+        "prompt segmen 2"
+      ],
+      "color": "#2a6",
+      "bgcolor": "#153"
+    },
+    {
+      "id": 225,
+      "type": "LVCPromptSegment",
+      "pos": [
+        -1500,
+        5900
+      ],
+      "size": [
+        420,
+        220
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "previous",
+          "type": "STRING",
+          "shape": 7,
+          "link": 427
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt_list",
+          "type": "STRING",
+          "links": [
+            428
+          ]
+        }
+      ],
+      "title": "LVC Prompt Segment 3",
+      "properties": {
+        "Node name for S&R": "LVCPromptSegment"
+      },
+      "widgets_values": [
+        "prompt segmen 3"
       ],
       "color": "#2a6",
       "bgcolor": "#153"
@@ -2154,6 +2276,30 @@
       222,
       4,
       "AUDIO"
+    ],
+    [
+      426,
+      223,
+      0,
+      224,
+      0,
+      "STRING"
+    ],
+    [
+      427,
+      224,
+      0,
+      225,
+      0,
+      "STRING"
+    ],
+    [
+      428,
+      225,
+      0,
+      221,
+      1,
+      "STRING"
     ]
   ],
   "groups": [],
